@@ -1,0 +1,68 @@
+# ATTACK SWING ANIMATION
+
+Attack/swing frame progression, read from left to right.
+Each 3x3 area is one "frame" intended to be calculated + animated in the space
+around a player character.
+
+  Right-facing attack:
+  XXX   XXX    XXX  XX/   X|X
+  X@X   X@X    X@-  X@X   X@X
+  X|X   XX\    XXX  XXX   XXX
+
+  Down-facing attack:
+  XXX   XXX    XXX  XXX   X|X
+  X@-   X@X    X@X  X@X   -@X
+  XXX   XX\    X|X  /XX   XXX
+
+  Left-facing attack:
+  XXX   XXX    XXX  \XX   X|X
+  X@X   X@X    -@X  X@X   X@X
+  X|X   /XX    XXX  XXX   XXX
+
+  Up-facing attack:
+  XXX   \XX    X|X  XX/   XXX
+  -@X   X@X    X@X  X@X   X@-
+  XXX   XXX    XXX  XXX   XXX
+
+Implementation Note: 
+This attack animation is intended to
+represent a "swing" of a weapon that occurs in a 
+3x3 square around the user. This square is the intended
+"swing area" for the weapon swing.
+
+If another player or a monster or environment is caught in
+the part of the swing area containing the "blade" 
+(the "|" or "\" or "-" or "/" character),
+the respective entity should receive damage.
+
+# DIRECTIONAL INDICATOR
+
+  XXX   XXX    X^X  XXX   
+  X@X   X@>    X@X  <@X   
+  XvX   XXX    XXX  XXX
+  down  right  up   left
+
+  Depending on the last arrow key used, the directional indicator 
+  should update and persist to show players which direction their character is facing
+
+# THRUST ATTACKS
+
+  Right-facing attack:
+  XXXXX XXXXX XXXXXX
+  XXXXX XXXXX XXXXXX
+  XX@XX XX@XX XX@XXX
+  X`--X XX`-- XXX`--
+  XXXXX XXXXX XXXXXX
+
+  Down-facing attack:
+
+
+  Left-facing attack:
+  XXX   XXX    XXX  \XX   X|X
+  X@X   X@X    -@X  X@X   X@X
+  X|X   /XX    XXX  XXX   XXX
+
+  Up-facing attack:
+  XXX   \XX    X|X  XX/   XXX
+  -@X   X@X    X@X  X@X   X@-
+  XXX   XXX    XXX  XXX   XXX

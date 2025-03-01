@@ -1,0 +1,3192 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rogue-like ASCII Map</title>
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=" />
+    <style>
+      :root {
+        --font-color: #ffffff;
+        --background-color: #111111;
+        --border-color: #666666;
+        /* Item colors */
+        --item-color-weapon: #ffcc00;
+        --item-color-armor: #00ccff;
+        --item-color-ring: #ff00ff;
+        --item-color-talisman: #ff00ff;
+        --item-color-consumable: #00ff00;
+      }
+
+      /* Reset default margins and ensure full-screen coverage */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100vh; /* Full viewport height */
+        width: 100vw; /* Full viewport width */
+        overflow: hidden; /* Prevent scrolling */
+        background: #000; /* Black background */
+      }
+
+      /* Style the pre element to fill the entire viewport */
+      pre {
+        font-family: "Courier New", monospace; /* Fixed-width font for ASCII */
+        font-size: 16px; /* Initial font size, will be adjusted by JS */
+        line-height: 1; /* Tight line spacing for consistent rendering */
+        color: #fff; /* White text on black background */
+        margin: 0;
+        padding: 0;
+        width: 100vw;
+        height: 100vh;
+        box-sizing: border-box;
+        white-space: pre; /* Preserve ASCII formatting */
+        overflow: hidden;
+        user-select: none; /* Prevent text selection */
+        position: absolute;
+        top: 0;
+        left: 0;
+      }
+
+      /* Center content */
+      body {
+        padding: 0;
+        margin: 0;
+      }
+
+      /* Stair styling */
+      .upstairs {
+        color: #ffcc00;
+        background-color: rgba(255, 153, 0, 0.3);
+        animation: blink-up 1.5s infinite;
+        font-weight: bold;
+        text-shadow: 0 0 10px #ffcc00;
+      }
+
+      .downstairs {
+        color: #66ffff;
+        background-color: rgba(0, 204, 255, 0.3);
+        animation: blink-down 1.5s infinite;
+        font-weight: bold;
+        text-shadow: 0 0 10px #66ffff;
+      }
+
+      /* Player character */
+      .player {
+        color: #ffffff;
+        font-weight: bold;
+        text-shadow: 0 0 10px #ffffff;
+      }
+
+      /* Direction indicator */
+      .direction {
+        color: #aaa;
+        font-size: 0.8em;
+        opacity: 0.8;
+        position: relative;
+        z-index: 10;
+        margin-left: -1em;
+        text-shadow: 1px 1px 2px black;
+      }
+
+      /* Weapon animation */
+      .weapon {
+        color: #ff9900;
+        text-shadow: 0 0 10px #ff9900;
+        font-weight: bold;
+        animation: weapon-glow 0.5s infinite;
+      }
+
+      @keyframes weapon-glow {
+        0% {
+          text-shadow: 0 0 5px #ff9900;
+        }
+        50% {
+          text-shadow: 0 0 15px #ff9900;
+          opacity: 1;
+        }
+        100% {
+          text-shadow: 0 0 5px #ff9900;
+        }
+      }
+
+      /* Animations for stair blinking */
+      @keyframes blink-up {
+        0% {
+          opacity: 0.4;
+          text-shadow: 0 0 5px #ff9900;
+        }
+        50% {
+          opacity: 1;
+          text-shadow: 0 0 20px #ff9900;
+        }
+        100% {
+          opacity: 0.4;
+          text-shadow: 0 0 5px #ff9900;
+        }
+      }
+
+      @keyframes blink-down {
+        0% {
+          opacity: 0.4;
+          text-shadow: 0 0 5px #00ccff;
+        }
+        50% {
+          opacity: 1;
+          text-shadow: 0 0 20px #00ccff;
+        }
+        100% {
+          opacity: 0.4;
+          text-shadow: 0 0 5px #00ccff;
+        }
+      }
+
+      /* Status effect styles */
+      .poison {
+        color: #5cff00;
+      }
+      .freeze {
+        color: #00ffff;
+      }
+      .flame {
+        color: #ff5500;
+      }
+      .bleed {
+        color: #ff0000;
+      }
+
+      /* Item symbols on map */
+      .weapon {
+        color: #ffcc00;
+      } /* Weapons: \ */
+      .armor {
+        color: #00ccff;
+      } /* Armor: & */
+      .trinket {
+        color: #ff00ff;
+      } /* Rings/Talismans: $ */
+    </style>
+  </head>
+  <body>
+    <pre id="map"></pre>
+    <script src="items.js"></script>
+    <script src="itemSystem.js"></script>
+    <script>
+      // We'll calculate these dynamically based on window size
+      let VIEWPORT_WIDTH = 80;
+      let VIEWPORT_HEIGHT = 24;
+      const MAP_WIDTH = 100;
+      const MAP_HEIGHT = 100;
+      const NUM_MAPS = 11;
+
+      let maps = [];
+      let currentMapIndex = 0;
+
+      // Note: playerDirection is now defined as part of the player object and initialized below
+
+      // Being class - base class for player and other entities
+      class Being {
+        constructor(x, y, char = "@", direction = 1) {
+          this.x = x;
+          this.y = y;
+          this.char = char;
+          this.direction = direction; // (0=down, 1=right, 2=up, 3=left)
+
+          // Core stats
+          this.stats = {
+            health: 100,
+            maxHealth: 100,
+            stamina: 100,
+            maxStamina: 100,
+            strength: 15,
+            dexterity: 12,
+            intelligence: 10,
+            faith: 8,
+            vitality: 14,
+            endurance: 13,
+            resistance: 11,
+            luck: 9,
+          };
+
+          // Equipment slots
+          this.equipment = {
+            head: null,
+            chest: null,
+            legs: null,
+            arms: null,
+            rightHand: [], // array to cycle through weapons
+            leftHand: [], // array to cycle through weapons
+            rings: [null, null], // two ring slots
+            talismans: [null, null, null], // three talisman slots
+          };
+
+          // Inventory
+          this.inventory = [];
+
+          // Status effects
+          this.buffs = [];
+          this.debuffs = [];
+
+          // Combat state
+          this.isAttacking = false;
+          this.attackFrame = 0;
+          this.attackSpeed = 100; // ms per frame
+        }
+
+        // Get current weapon from right hand
+        getCurrentWeapon() {
+          if (this.equipment.rightHand.length > 0) {
+            return this.equipment.rightHand[0]; // Get first item in right hand array
+          }
+          return null;
+        }
+
+        // Cycle through weapons in right hand
+        cycleRightHandWeapon() {
+          if (this.equipment.rightHand.length > 1) {
+            const weapon = this.equipment.rightHand.shift();
+            this.equipment.rightHand.push(weapon);
+            return true;
+          }
+          return false;
+        }
+
+        // Add item to inventory
+        addToInventory(item) {
+          console.log(
+            `DEBUG: addToInventory called with item:`,
+            JSON.stringify(item, null, 2)
+          );
+
+          if (!item) {
+            console.error(
+              "ERROR: Attempted to add null or undefined item to inventory"
+            );
+            console.trace("Stack trace for invalid item");
+            return;
+          }
+
+          // Check if item is stackable (e.g., consumables) and already exists
+          const existingItem = this.inventory.find(
+            (i) => i.id === item.id && i.type === item.type
+          );
+
+          console.log(
+            `DEBUG: Inventory before addition - ${this.inventory.length} items:`,
+            JSON.stringify(
+              this.inventory.map((i) => ({
+                id: i.id,
+                name: i.name,
+                type: i.type,
+              })),
+              null,
+              2
+            )
+          );
+
+          if (existingItem) {
+            console.log(
+              `Item already exists in inventory, increasing quantity from ${
+                existingItem.quantity
+              } to ${existingItem.quantity + (item.quantity || 1)}`
+            );
+            existingItem.quantity += item.quantity || 1;
+          } else {
+            console.log(`Adding new item to inventory: ${item.name}`);
+            // Make sure we're adding a proper copy of the item with all properties
+            const itemToAdd = { ...item, quantity: item.quantity || 1 };
+            console.log(
+              `DEBUG: Item being added:`,
+              JSON.stringify(itemToAdd, null, 2)
+            );
+            this.inventory.push(itemToAdd);
+          }
+
+          console.log(
+            `DEBUG: Inventory after addition - ${this.inventory.length} items`
+          );
+        }
+
+        // Remove item from inventory
+        removeFromInventory(itemId, quantity = 1) {
+          const index = this.inventory.findIndex((i) => i.id === itemId);
+
+          if (index >= 0) {
+            if (this.inventory[index].quantity > quantity) {
+              this.inventory[index].quantity -= quantity;
+            } else {
+              this.inventory.splice(index, 1);
+            }
+            return true;
+          }
+
+          return false;
+        }
+
+        // Add a buff
+        addBuff(buff) {
+          this.buffs.push({
+            ...buff,
+            startTime: Date.now(),
+            endTime: buff.duration ? Date.now() + buff.duration * 1000 : null,
+          });
+
+          // Apply buff effects to stats
+          if (buff.effects) {
+            Object.entries(buff.effects).forEach(([stat, value]) => {
+              if (this.stats[stat] !== undefined) {
+                this.stats[stat] += value;
+              }
+            });
+          }
+        }
+
+        // Add a debuff
+        addDebuff(debuff) {
+          this.debuffs.push({
+            ...debuff,
+            startTime: Date.now(),
+            endTime: debuff.duration
+              ? Date.now() + debuff.duration * 1000
+              : null,
+          });
+
+          // Apply debuff effects to stats
+          if (debuff.effects) {
+            Object.entries(debuff.effects).forEach(([stat, value]) => {
+              if (this.stats[stat] !== undefined) {
+                this.stats[stat] += value; // Note: value should be negative for debuffs
+              }
+            });
+          }
+        }
+
+        // Update status effects (remove expired buffs/debuffs)
+        updateStatusEffects() {
+          const now = Date.now();
+
+          // Remove expired buffs and their effects
+          this.buffs = this.buffs.filter((buff) => {
+            if (buff.endTime && buff.endTime <= now) {
+              // Remove buff effects
+              if (buff.effects) {
+                Object.entries(buff.effects).forEach(([stat, value]) => {
+                  if (this.stats[stat] !== undefined) {
+                    this.stats[stat] -= value;
+                  }
+                });
+              }
+              return false;
+            }
+            return true;
+          });
+
+          // Remove expired debuffs and their effects
+          this.debuffs = this.debuffs.filter((debuff) => {
+            if (debuff.endTime && debuff.endTime <= now) {
+              // Remove debuff effects
+              if (debuff.effects) {
+                Object.entries(debuff.effects).forEach(([stat, value]) => {
+                  if (this.stats[stat] !== undefined) {
+                    this.stats[stat] -= value; // Note: value should be negative for debuffs
+                  }
+                });
+              }
+              return false;
+            }
+            return true;
+          });
+        }
+
+        // Take damage
+        takeDamage(amount) {
+          this.stats.health = Math.max(0, this.stats.health - amount);
+          return this.stats.health <= 0;
+        }
+
+        // Heal
+        heal(amount) {
+          this.stats.health = Math.min(
+            this.stats.maxHealth,
+            this.stats.health + amount
+          );
+        }
+
+        // Use stamina
+        useStamina(amount) {
+          if (this.stats.stamina >= amount) {
+            this.stats.stamina -= amount;
+            return true;
+          }
+          return false;
+        }
+
+        // Recover stamina
+        recoverStamina(amount) {
+          this.stats.stamina = Math.min(
+            this.stats.maxStamina,
+            this.stats.stamina + amount
+          );
+        }
+
+        // Get damage output (base damage calculation)
+        calculateDamage() {
+          // Basic formula: strength + weapon damage + random factor
+          const weapon = this.getCurrentWeapon();
+          const weaponDamage = weapon ? weapon.damage : 5; // Default unarmed damage
+
+          // Calculate base damage
+          let damage = this.stats.strength * 0.5 + weaponDamage;
+
+          // Add random variation (±20%)
+          const variation = 0.8 + Math.random() * 0.4;
+          damage = Math.floor(damage * variation);
+
+          return damage;
+        }
+
+        // Check if the being is dead
+        isDead() {
+          return this.stats.health <= 0;
+        }
+      }
+
+      // Player class extends Being
+      class Player extends Being {
+        constructor(x, y) {
+          super(x, y, "@", 1); // Call the parent constructor
+          // Player-specific properties can be added here
+        }
+
+        // Attack method
+        attack() {
+          // Reset any existing attack animation
+          if (this.isAttacking) {
+            if (attackTimer) {
+              clearTimeout(attackTimer);
+              attackTimer = null;
+            }
+          }
+
+          // Check if player has enough stamina to attack
+          const staminaCost = 10;
+          if (!this.useStamina(staminaCost)) {
+            return false; // Not enough stamina
+          }
+
+          this.isAttacking = true;
+          this.attackFrame = 0;
+
+          // Sync global variables for backward compatibility
+          isAttacking = this.isAttacking;
+          attackFrame = this.attackFrame;
+
+          // Start the animation loop
+          this.updateAttackAnimation();
+          return true;
+        }
+
+        // Update attack animation
+        updateAttackAnimation() {
+          // Sync global variables for backward compatibility
+          isAttacking = this.isAttacking;
+          attackFrame = this.attackFrame;
+
+          // Update the map display with the current attack frame
+          updateMap();
+
+          // Check for wall hits in this frame
+          checkAttackHits();
+
+          this.attackFrame++;
+          attackFrame = this.attackFrame; // Keep in sync
+
+          if (this.attackFrame < attackFrames) {
+            // Continue to the next frame - use global attackTimer for consistency
+            attackTimer = setTimeout(
+              () => this.updateAttackAnimation(),
+              this.attackSpeed
+            );
+          } else {
+            this.isAttacking = false;
+            isAttacking = false; // Keep in sync
+            // Final update to remove the attack animation
+            updateMap();
+          }
+        }
+      }
+
+      // Create player instance
+      let player = new Player(250, 250);
+      // Initialize global variables from player for backward compatibility
+      let px = player.x;
+      let py = player.y;
+      let playerDirection = player.direction;
+      let isAttacking = player.isAttacking;
+      let attackFrame = player.attackFrame;
+
+      // Directional indicators for each direction (down, right, up, left)
+      const directionIndicators = ["v", ">", "^", "<"];
+
+      // Animation state variables
+      let attackFrames = 5;
+      let attackSpeed = 100; // ms per frame
+      let attackTimer = null;
+
+      // Attack animation frames for each direction (down, right, up, left)
+      // Each direction has 5 frames showing a swing motion
+      const directionAttackAnimations = [
+        // DOWN (0) - Down-facing attack pattern from example-ascii.txt
+        [
+          // Frame 1
+          [
+            ["X", "X", "X"],
+            ["X", "@", "-"],
+            ["X", "X", "X"],
+          ],
+          // Frame 2
+          [
+            ["X", "X", "X"],
+            ["X", "@", "X"],
+            ["X", "X", "\\"],
+          ],
+          // Frame 3
+          [
+            ["X", "X", "X"],
+            ["X", "@", "X"],
+            ["X", "|", "X"],
+          ],
+          // Frame 4
+          [
+            ["X", "X", "X"],
+            ["X", "@", "X"],
+            ["/", "X", "X"],
+          ],
+          // Frame 5
+          [
+            ["X", "|", "X"],
+            ["-", "@", "X"],
+            ["X", "X", "X"],
+          ],
+        ],
+
+        // RIGHT (1) - Right-facing attack pattern from example-ascii.txt
+        [
+          // Frame 1
+          [
+            ["X", "X", "X"],
+            ["X", "@", "X"],
+            ["X", "|", "X"],
+          ],
+          // Frame 2
+          [
+            ["X", "X", "X"],
+            ["X", "@", "X"],
+            ["X", "X", "\\"],
+          ],
+          // Frame 3
+          [
+            ["X", "X", "X"],
+            ["X", "@", "-"],
+            ["X", "X", "X"],
+          ],
+          // Frame 4
+          [
+            ["X", "X", "/"],
+            ["X", "@", "X"],
+            ["X", "X", "X"],
+          ],
+          // Frame 5
+          [
+            ["X", "|", "X"],
+            ["X", "@", "X"],
+            ["X", "X", "X"],
+          ],
+        ],
+
+        // UP (2) - Up-facing attack pattern from example-ascii.txt
+        [
+          // Frame 1
+          [
+            ["X", "X", "X"],
+            ["-", "@", "X"],
+            ["X", "X", "X"],
+          ],
+          // Frame 2
+          [
+            ["X", "\\", "X"],
+            ["X", "@", "X"],
+            ["X", "X", "X"],
+          ],
+          // Frame 3
+          [
+            ["X", "|", "X"],
+            ["X", "@", "X"],
+            ["X", "X", "X"],
+          ],
+          // Frame 4
+          [
+            ["X", "X", "/"],
+            ["X", "@", "X"],
+            ["X", "X", "X"],
+          ],
+          // Frame 5
+          [
+            ["X", "X", "X"],
+            ["X", "@", "-"],
+            ["X", "X", "X"],
+          ],
+        ],
+
+        // LEFT (3) - Left-facing attack pattern from example-ascii.txt
+        [
+          // Frame 1
+          [
+            ["X", "X", "X"],
+            ["X", "@", "X"],
+            ["X", "|", "X"],
+          ],
+          // Frame 2
+          [
+            ["X", "X", "X"],
+            ["X", "@", "X"],
+            ["/", "X", "X"],
+          ],
+          // Frame 3
+          [
+            ["X", "X", "X"],
+            ["-", "@", "X"],
+            ["X", "X", "X"],
+          ],
+          // Frame 4
+          [
+            ["\\", "X", "X"],
+            ["X", "@", "X"],
+            ["X", "X", "X"],
+          ],
+          // Frame 5
+          [
+            ["X", "|", "X"],
+            ["X", "@", "X"],
+            ["X", "X", "X"],
+          ],
+        ],
+      ];
+
+      // Attack animation frames (3x3 grid around player) - keeping for compatibility
+      const attackAnimations = [
+        // Frame 1: Initial position
+        [
+          ["X", "X", "X"],
+          ["X", "@", "X"],
+          ["X", "|", "X"],
+        ],
+        // Frame 2: Swing right
+        [
+          ["X", "X", "X"],
+          ["X", "@", "X"],
+          ["X", "X", "\\"],
+        ],
+        // Frame 3: Horizontal swing
+        [
+          ["X", "X", "X"],
+          ["X", "@", "-"],
+          ["X", "X", "X"],
+        ],
+        // Frame 4: Swing left/up
+        [
+          ["X", "X", "/"],
+          ["X", "@", "X"],
+          ["X", "X", "X"],
+        ],
+        // Frame 5: Vertical swing top
+        [
+          ["X", "|", "X"],
+          ["X", "@", "X"],
+          ["X", "X", "X"],
+        ],
+      ];
+
+      // Direction vectors for checking entities in the attack areas
+      const attackDirections = [
+        // DOWN facing direction vectors (0)
+        [
+          [1, 0], // Frame 1: Right (horizontal slash to right)
+          [1, 1], // Frame 2: Down-Right (diagonal slash)
+          [0, 1], // Frame 3: Down (vertical slash below)
+          [-1, 1], // Frame 4: Down-Left (diagonal slash)
+          [-1, 0], // Frame 5: Left (horizontal slash to left)
+        ],
+        // RIGHT facing direction vectors (1)
+        [
+          [0, 1], // Frame 1: Down (vertical slash below)
+          [1, 1], // Frame 2: Down-Right (diagonal slash)
+          [1, 0], // Frame 3: Right (horizontal slash to right)
+          [1, -1], // Frame 4: Up-Right (diagonal slash)
+          [0, -1], // Frame 5: Up (vertical slash above)
+        ],
+        // UP facing direction vectors (2)
+        [
+          [-1, 0], // Frame 1: Left (horizontal slash to left)
+          [-1, -1], // Frame 2: Up-Left (diagonal slash)
+          [0, -1], // Frame 3: Up (vertical slash above)
+          [1, -1], // Frame 4: Up-Right (diagonal slash)
+          [1, 0], // Frame 5: Right (horizontal slash to right)
+        ],
+        // LEFT facing direction vectors (3)
+        [
+          [0, 1], // Frame 1: Down (vertical slash below)
+          [-1, 1], // Frame 2: Down-Left (diagonal slash)
+          [-1, 0], // Frame 3: Left (horizontal slash to left)
+          [-1, -1], // Frame 4: Up-Left (diagonal slash)
+          [0, -1], // Frame 5: Up (vertical slash above)
+        ],
+      ];
+
+      // Simple noise function (for Perlin-like generation)
+      function noise(x, y, seed) {
+        const n = x + y * 57 + seed * 131;
+        return (
+          ((n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff) /
+          1073741824
+        );
+      }
+
+      // Map generation functions
+      function generateCaveMap() {
+        // Cellular Automata
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT);
+        // Initialize with random walls and floors
+        for (let i = 0; i < MAP_WIDTH * MAP_HEIGHT; i++) {
+          map[i] = Math.random() < 0.45 ? "#" : ".";
+        }
+        // Apply cellular automata rules
+        for (let iter = 0; iter < 5; iter++) {
+          let newMap = map.slice();
+          for (let y = 0; y < MAP_HEIGHT; y++) {
+            for (let x = 0; x < MAP_WIDTH; x++) {
+              let neighbors = 0;
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  let nx = x + dx;
+                  let ny = y + dy;
+                  if (nx >= 0 && nx < MAP_WIDTH && ny >= 0 && ny < MAP_HEIGHT) {
+                    if (map[ny * MAP_WIDTH + nx] === "#") neighbors++;
+                  } else {
+                    neighbors++; // Edge counts as wall
+                  }
+                }
+              }
+              newMap[y * MAP_WIDTH + x] = neighbors >= 5 ? "#" : ".";
+            }
+          }
+          map = newMap;
+        }
+        return map;
+      }
+
+      function generateTerrainMap() {
+        // Perlin Noise Terrain
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT);
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            let value = noise(x / 100, y / 100, 1);
+            if (value < 0.3) map[y * MAP_WIDTH + x] = "~"; // Water
+            else if (value < 0.7) map[y * MAP_WIDTH + x] = "."; // Ground
+            else map[y * MAP_WIDTH + x] = "^"; // Mountains
+          }
+        }
+
+        // Second pass: Create navigable paths through the terrain
+        createNavigablePaths(map, 30, 50, 3); // Create several paths
+        return map;
+      }
+
+      function generateMazeMap() {
+        // Iterative Backtracking Maze (non-recursive)
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT).fill("#");
+
+        // Use an explicit stack instead of recursion
+        let stack = [{ x: 1, y: 1 }];
+        map[1 * MAP_WIDTH + 1] = ".";
+
+        while (stack.length > 0) {
+          let current = stack[stack.length - 1];
+          let x = current.x;
+          let y = current.y;
+
+          let directions = [
+            [0, 2],
+            [2, 0],
+            [0, -2],
+            [-2, 0],
+          ];
+          directions.sort(() => Math.random() - 0.5);
+
+          let moved = false;
+          for (let [dx, dy] of directions) {
+            let nx = x + dx;
+            let ny = y + dy;
+            if (
+              nx >= 0 &&
+              nx < MAP_WIDTH &&
+              ny >= 0 &&
+              ny < MAP_HEIGHT &&
+              map[ny * MAP_WIDTH + nx] === "#"
+            ) {
+              map[(y + dy / 2) * MAP_WIDTH + (x + dx / 2)] = ".";
+              map[ny * MAP_WIDTH + nx] = ".";
+              stack.push({ x: nx, y: ny });
+              moved = true;
+              break;
+            }
+          }
+
+          if (!moved) {
+            stack.pop();
+          }
+        }
+
+        // Second pass: Widen corridors and create rooms
+        createRoomsAndWideCorridors(map);
+        return map;
+      }
+
+      function generateIslandMap() {
+        // Noise-based Islands
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT);
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            let value = noise(x / 50, y / 50, 2);
+            map[y * MAP_WIDTH + x] = value < 0.4 ? "~" : ".";
+          }
+        }
+
+        // Second pass: Connect islands with bridges
+        connectIslandsWithBridges(map);
+        return map;
+      }
+
+      function generateForestMap() {
+        // Dense Forest with Paths
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT);
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            let value = noise(x / 80, y / 80, 3);
+            map[y * MAP_WIDTH + x] = value < 0.6 ? "^" : ".";
+          }
+        }
+
+        // Second pass: Create forest paths
+        createForestPaths(map);
+        return map;
+      }
+
+      function generateRiverMap() {
+        // Rivers with Bridges
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT).fill(".");
+
+        // Create more rivers (increased from 5 to 8)
+        for (let i = 0; i < 8; i++) {
+          let x = Math.floor(Math.random() * MAP_WIDTH);
+          let y = 0;
+          while (y < MAP_HEIGHT) {
+            map[y * MAP_WIDTH + x] = "~";
+            // Make rivers slightly wider
+            if (Math.random() < 0.5) {
+              if (x + 1 < MAP_WIDTH) map[y * MAP_WIDTH + (x + 1)] = "~";
+              if (x - 1 >= 0) map[y * MAP_WIDTH + (x - 1)] = "~";
+            }
+
+            x += Math.floor(Math.random() * 3) - 1;
+            x = Math.max(0, Math.min(MAP_WIDTH - 1, x));
+            y++;
+
+            // Increase bridge frequency (from 0.05 to 0.1)
+            if (Math.random() < 0.1) {
+              // Create wider bridges
+              for (let bx = -1; bx <= 1; bx++) {
+                const bridgeX = x + bx;
+                if (bridgeX >= 0 && bridgeX < MAP_WIDTH) {
+                  map[y * MAP_WIDTH + bridgeX] = "="; // Bridge
+                }
+              }
+            }
+          }
+        }
+
+        // Second pass: Create terrain features and ensure navigable areas
+        createRiverValleyStructures(map);
+        return map;
+      }
+
+      function generateMountainMap() {
+        // Mountain Ranges with increased density
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT);
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            let value = noise(x / 60, y / 60, 4);
+            // Increase mountain density by lowering the threshold from 0.6 to 0.5
+            map[y * MAP_WIDTH + x] = value > 0.5 ? "^" : ".";
+
+            // Add some additional mountain features for visual interest
+            if (value > 0.4 && value <= 0.5 && Math.random() < 0.4) {
+              map[y * MAP_WIDTH + x] = "^";
+            }
+          }
+        }
+
+        // Second pass: Create mountain passes and valleys
+        createMountainPasses(map);
+        return map;
+      }
+
+      function generateUrbanMap() {
+        // Grid-like Urban Layout
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT).fill(".");
+        for (let y = 0; y < MAP_HEIGHT; y += 50) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            if (Math.random() < 0.8) map[y * MAP_WIDTH + x] = "#"; // Buildings
+          }
+        }
+        for (let x = 0; x < MAP_WIDTH; x += 50) {
+          for (let y = 0; y < MAP_HEIGHT; y++) {
+            if (Math.random() < 0.8) map[y * MAP_WIDTH + x] = "-"; // Roads
+          }
+        }
+
+        // Second pass: Create a better urban layout with streets and buildings
+        createUrbanLayout(map);
+        return map;
+      }
+
+      function generateVolcanicMap() {
+        // Volcanic Terrain
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT);
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            let value = noise(x / 70, y / 70, 5);
+            if (value < 0.3) map[y * MAP_WIDTH + x] = "~"; // Lava
+            else if (value < 0.6) map[y * MAP_WIDTH + x] = "#"; // Rock
+            else map[y * MAP_WIDTH + x] = ".";
+          }
+        }
+
+        // Second pass: Create safe paths through volcanic terrain
+        createVolcanicPaths(map);
+        return map;
+      }
+
+      function generateHybridMap() {
+        // Mixed Terrain with more navigable areas
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT);
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            let value = noise(x / 90, y / 90, 6);
+            // Adjust thresholds to create more navigable space
+            if (value < 0.2)
+              map[y * MAP_WIDTH + x] = "~"; // Reduced water from 0.25 to 0.2
+            else if (value < 0.4)
+              map[y * MAP_WIDTH + x] = "^"; // Reduced mountains from 0.5 to 0.4
+            else if (value < 0.6)
+              map[y * MAP_WIDTH + x] = "#"; // Reduced walls from 0.75 to 0.6
+            else map[y * MAP_WIDTH + x] = "."; // Increased navigable space
+          }
+        }
+
+        // Second pass: Create connected navigable areas
+        createHybridNavigableAreas(map);
+        return map;
+      }
+
+      function generateArenaMap() {
+        // Circular Gladiator Arena
+        let map = new Array(MAP_WIDTH * MAP_HEIGHT).fill("#"); // Start with walls
+
+        // Create a large circular arena
+        const centerX = Math.floor(MAP_WIDTH / 2);
+        const centerY = Math.floor(MAP_HEIGHT / 2);
+        const arenaRadius = Math.min(MAP_WIDTH, MAP_HEIGHT) * 0.4; // Large arena taking up most of the map
+
+        // Create the main arena floor
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+            if (dist <= arenaRadius) {
+              map[y * MAP_WIDTH + x] = "."; // Arena floor
+            }
+          }
+        }
+
+        // Add some boulders/obstacles scattered throughout the arena
+        const numBoulders = 80;
+        for (let i = 0; i < numBoulders; i++) {
+          // Random position within the arena
+          const angle = Math.random() * Math.PI * 2;
+          const distance = Math.random() * (arenaRadius * 0.9); // Keep within arena
+          const boulderX = Math.floor(centerX + Math.cos(angle) * distance);
+          const boulderY = Math.floor(centerY + Math.sin(angle) * distance);
+
+          // Create boulder of random size
+          const boulderSize = Math.floor(Math.random() * 5) + 2;
+          for (
+            let y = boulderY - boulderSize;
+            y <= boulderY + boulderSize;
+            y++
+          ) {
+            for (
+              let x = boulderX - boulderSize;
+              x <= boulderX + boulderSize;
+              x++
+            ) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                const dist = Math.sqrt(
+                  (x - boulderX) ** 2 + (y - boulderY) ** 2
+                );
+                if (dist <= boulderSize * (0.7 + Math.random() * 0.3)) {
+                  // Create irregular boulder shape
+                  if (Math.random() < 0.7) {
+                    // Check if we're still in the arena
+                    const arenaDistCheck = Math.sqrt(
+                      (x - centerX) ** 2 + (y - centerY) ** 2
+                    );
+                    if (arenaDistCheck <= arenaRadius) {
+                      map[y * MAP_WIDTH + x] = "^"; // Boulder
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Add some smaller obstacles and decorative elements
+        for (let i = 0; i < 150; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const distance = Math.random() * arenaRadius;
+          const x = Math.floor(centerX + Math.cos(angle) * distance);
+          const y = Math.floor(centerY + Math.sin(angle) * distance);
+
+          if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+            // 30% chance for a small boulder, otherwise keep as floor
+            if (Math.random() < 0.3) {
+              map[y * MAP_WIDTH + x] = "^";
+            }
+          }
+        }
+
+        // Create entrances/exits to the arena (4 cardinal directions)
+        const entranceWidth = 10;
+        const entranceLength = 30;
+
+        // North entrance
+        for (
+          let y = centerY - arenaRadius - entranceLength;
+          y <= centerY - arenaRadius;
+          y++
+        ) {
+          for (
+            let x = centerX - entranceWidth / 2;
+            x <= centerX + entranceWidth / 2;
+            x++
+          ) {
+            if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+              map[y * MAP_WIDTH + x] = ".";
+            }
+          }
+        }
+
+        // South entrance
+        for (
+          let y = centerY + arenaRadius;
+          y <= centerY + arenaRadius + entranceLength;
+          y++
+        ) {
+          for (
+            let x = centerX - entranceWidth / 2;
+            x <= centerX + entranceWidth / 2;
+            x++
+          ) {
+            if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+              map[y * MAP_WIDTH + x] = ".";
+            }
+          }
+        }
+
+        // East entrance
+        for (
+          let x = centerX + arenaRadius;
+          x <= centerX + arenaRadius + entranceLength;
+          x++
+        ) {
+          for (
+            let y = centerY - entranceWidth / 2;
+            y <= centerY + entranceWidth / 2;
+            y++
+          ) {
+            if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+              map[y * MAP_WIDTH + x] = ".";
+            }
+          }
+        }
+
+        // West entrance
+        for (
+          let x = centerX - arenaRadius - entranceLength;
+          x <= centerX - arenaRadius;
+          x++
+        ) {
+          for (
+            let y = centerY - entranceWidth / 2;
+            y <= centerY + entranceWidth / 2;
+            y++
+          ) {
+            if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+              map[y * MAP_WIDTH + x] = ".";
+            }
+          }
+        }
+
+        return map;
+      }
+
+      // Helper function to create navigable paths through terrain
+      function createNavigablePaths(map, numPaths, maxLength, width) {
+        // Create horizontal and vertical paths
+        for (let i = 0; i < numPaths; i++) {
+          const horizontal = Math.random() < 0.5;
+          const startX = Math.floor(Math.random() * MAP_WIDTH);
+          const startY = Math.floor(Math.random() * MAP_HEIGHT);
+          const length = Math.floor(Math.random() * maxLength) + 20;
+
+          if (horizontal) {
+            const y = startY;
+            for (let x = startX; x < startX + length && x < MAP_WIDTH; x++) {
+              for (let w = 0; w < width; w++) {
+                const pathY = y + w - Math.floor(width / 2);
+                if (pathY >= 0 && pathY < MAP_HEIGHT) {
+                  map[pathY * MAP_WIDTH + x] = ".";
+                }
+              }
+            }
+          } else {
+            const x = startX;
+            for (let y = startY; y < startY + length && y < MAP_HEIGHT; y++) {
+              for (let w = 0; w < width; w++) {
+                const pathX = x + w - Math.floor(width / 2);
+                if (pathX >= 0 && pathX < MAP_WIDTH) {
+                  map[y * MAP_WIDTH + pathX] = ".";
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Helper function to widen corridors and create rooms in maze
+      function createRoomsAndWideCorridors(map) {
+        // Create more and larger rooms
+        for (let i = 0; i < 100; i++) {
+          // Increased from 50 to 100 rooms
+          const roomWidth = Math.floor(Math.random() * 12) + 8; // Increased size from 5-12 to 8-20
+          const roomHeight = Math.floor(Math.random() * 12) + 8;
+          const roomX = Math.floor(Math.random() * (MAP_WIDTH - roomWidth));
+          const roomY = Math.floor(Math.random() * (MAP_HEIGHT - roomHeight));
+
+          // Check if the room connects to a path
+          let connectsToPath = false;
+          for (let y = roomY - 1; y < roomY + roomHeight + 1; y++) {
+            for (let x = roomX - 1; x < roomX + roomWidth + 1; x++) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                if (map[y * MAP_WIDTH + x] === ".") {
+                  connectsToPath = true;
+                  break;
+                }
+              }
+            }
+            if (connectsToPath) break;
+          }
+
+          // If it connects to a path, create the room
+          if (connectsToPath) {
+            for (let y = roomY; y < roomY + roomHeight; y++) {
+              for (let x = roomX; x < roomX + roomWidth; x++) {
+                if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                  map[y * MAP_WIDTH + x] = ".";
+                }
+              }
+            }
+          }
+        }
+
+        // Widen corridors more aggressively
+        let newMap = map.slice();
+        for (let y = 1; y < MAP_HEIGHT - 1; y++) {
+          for (let x = 1; x < MAP_WIDTH - 1; x++) {
+            if (map[y * MAP_WIDTH + x] === ".") {
+              // Look at neighbors in a wider radius
+              for (let dy = -2; dy <= 2; dy++) {
+                for (let dx = -2; dx <= 2; dx++) {
+                  if (Math.random() < 0.6) {
+                    // Increased from 0.4 to 0.6 chance to widen
+                    const nx = x + dx;
+                    const ny = y + dy;
+                    if (
+                      nx >= 0 &&
+                      nx < MAP_WIDTH &&
+                      ny >= 0 &&
+                      ny < MAP_HEIGHT
+                    ) {
+                      newMap[ny * MAP_WIDTH + nx] = ".";
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Copy back
+        for (let i = 0; i < MAP_WIDTH * MAP_HEIGHT; i++) {
+          map[i] = newMap[i];
+        }
+
+        // Add some random additional paths to connect isolated areas
+        for (let i = 0; i < 30; i++) {
+          const startX = Math.floor(Math.random() * MAP_WIDTH);
+          const startY = Math.floor(Math.random() * MAP_HEIGHT);
+          const endX = Math.floor(Math.random() * MAP_WIDTH);
+          const endY = Math.floor(Math.random() * MAP_HEIGHT);
+
+          // Simple line-drawing algorithm to create additional paths
+          const dx = endX - startX;
+          const dy = endY - startY;
+          const steps = Math.max(Math.abs(dx), Math.abs(dy));
+
+          for (let step = 0; step <= steps; step++) {
+            const t = steps === 0 ? 0 : step / steps;
+            const x = Math.floor(startX + t * dx);
+            const y = Math.floor(startY + t * dy);
+
+            // Create a wider path
+            for (let wy = -2; wy <= 2; wy++) {
+              for (let wx = -2; wx <= 2; wx++) {
+                const pathX = x + wx;
+                const pathY = y + wy;
+                if (
+                  pathX >= 0 &&
+                  pathX < MAP_WIDTH &&
+                  pathY >= 0 &&
+                  pathY < MAP_HEIGHT
+                ) {
+                  if (Math.random() < 0.7) {
+                    map[pathY * MAP_WIDTH + pathX] = ".";
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Helper function to connect islands with bridges
+      function connectIslandsWithBridges(map) {
+        // Identify islands
+        let islands = [];
+        let visited = new Array(MAP_WIDTH * MAP_HEIGHT).fill(false);
+
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            if (map[y * MAP_WIDTH + x] === "." && !visited[y * MAP_WIDTH + x]) {
+              // Found a new island
+              let island = [];
+              let queue = [{ x, y }];
+              visited[y * MAP_WIDTH + x] = true;
+
+              while (queue.length > 0) {
+                let { x: cx, y: cy } = queue.shift();
+                island.push({ x: cx, y: cy });
+
+                // Check neighbors
+                const directions = [
+                  [0, 1],
+                  [1, 0],
+                  [0, -1],
+                  [-1, 0],
+                ];
+                for (let [dx, dy] of directions) {
+                  const nx = cx + dx;
+                  const ny = cy + dy;
+                  if (
+                    nx >= 0 &&
+                    nx < MAP_WIDTH &&
+                    ny >= 0 &&
+                    ny < MAP_HEIGHT &&
+                    map[ny * MAP_WIDTH + nx] === "." &&
+                    !visited[ny * MAP_WIDTH + nx]
+                  ) {
+                    queue.push({ x: nx, y: ny });
+                    visited[ny * MAP_WIDTH + nx] = true;
+                  }
+                }
+              }
+
+              islands.push(island);
+            }
+          }
+        }
+
+        // Connect islands with bridges
+        for (let i = 1; i < islands.length; i++) {
+          const fromIsland = islands[i - 1];
+          const toIsland = islands[i];
+
+          // Find closest points between islands
+          let minDist = Infinity;
+          let best = null;
+
+          for (let p1 of fromIsland) {
+            for (let p2 of toIsland) {
+              const dist = Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
+              if (dist < minDist) {
+                minDist = dist;
+                best = { from: p1, to: p2 };
+              }
+            }
+          }
+
+          if (best) {
+            // Draw a bridge (path of '=') between the points
+            const { from, to } = best;
+            const steps = Math.ceil(minDist);
+
+            for (let step = 0; step <= steps; step++) {
+              const t = step / steps;
+              const x = Math.floor(from.x + t * (to.x - from.x));
+              const y = Math.floor(from.y + t * (to.y - from.y));
+
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                // Create a wider bridge (2-3 tiles)
+                for (let w = -1; w <= 1; w++) {
+                  const bridgeX = x + w;
+                  const bridgeY = y + w;
+                  if (
+                    bridgeX >= 0 &&
+                    bridgeX < MAP_WIDTH &&
+                    bridgeY >= 0 &&
+                    bridgeY < MAP_HEIGHT
+                  ) {
+                    map[y * MAP_WIDTH + bridgeX] = "="; // Horizontal bridge
+                    map[bridgeY * MAP_WIDTH + x] = "="; // Vertical bridge
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Helper function to create forest paths
+      function createForestPaths(map) {
+        // Create a network of paths through the forest
+        const numPaths = 50; // Increased from 30 to 50 paths
+        const pathWidth = 5; // Increased from 3 to 5
+
+        for (let i = 0; i < numPaths; i++) {
+          const startX = Math.floor(Math.random() * MAP_WIDTH);
+          const startY = Math.floor(Math.random() * MAP_HEIGHT);
+          const endX = Math.floor(Math.random() * MAP_WIDTH);
+          const endY = Math.floor(Math.random() * MAP_HEIGHT);
+
+          // Simple line-drawing algorithm
+          const dx = endX - startX;
+          const dy = endY - startY;
+          const steps = Math.max(Math.abs(dx), Math.abs(dy));
+
+          for (let step = 0; step <= steps; step++) {
+            const t = steps === 0 ? 0 : step / steps;
+            const x = Math.floor(startX + t * dx);
+            const y = Math.floor(startY + t * dy);
+
+            // Create a wider path
+            for (let wy = -pathWidth; wy <= pathWidth; wy++) {
+              for (let wx = -pathWidth; wx <= pathWidth; wx++) {
+                const pathX = x + wx;
+                const pathY = y + wy;
+                if (
+                  pathX >= 0 &&
+                  pathX < MAP_WIDTH &&
+                  pathY >= 0 &&
+                  pathY < MAP_HEIGHT
+                ) {
+                  map[pathY * MAP_WIDTH + pathX] = ".";
+                }
+              }
+            }
+          }
+        }
+
+        // Create more and larger clearings (larger open areas)
+        for (let i = 0; i < 40; i++) {
+          // Increased from 20 to 40 clearings
+          const centerX = Math.floor(Math.random() * MAP_WIDTH);
+          const centerY = Math.floor(Math.random() * MAP_HEIGHT);
+          const radius = Math.floor(Math.random() * 25) + 15; // Increased from 5-20 to 15-40
+
+          for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+                if (dist <= radius) {
+                  map[y * MAP_WIDTH + x] = ".";
+                }
+              }
+            }
+          }
+        }
+
+        // Add some smaller scattered clearings
+        for (let i = 0; i < 100; i++) {
+          const centerX = Math.floor(Math.random() * MAP_WIDTH);
+          const centerY = Math.floor(Math.random() * MAP_HEIGHT);
+          const radius = Math.floor(Math.random() * 8) + 3;
+
+          for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+                if (dist <= radius) {
+                  map[y * MAP_WIDTH + x] = ".";
+                }
+              }
+            }
+          }
+        }
+
+        // Connect isolated clearings with additional paths
+        // Find clearings that are close to each other and connect them
+        for (let y = 0; y < MAP_HEIGHT; y += 50) {
+          for (let x = 0; x < MAP_WIDTH; x += 50) {
+            // Check if this area has a clearing
+            let hasClearing = false;
+            let clearingX = 0,
+              clearingY = 0;
+
+            for (let cy = y; cy < y + 50 && cy < MAP_HEIGHT; cy++) {
+              for (let cx = x; cx < x + 50 && cx < MAP_WIDTH; cx++) {
+                if (map[cy * MAP_WIDTH + cx] === ".") {
+                  hasClearing = true;
+                  clearingX = cx;
+                  clearingY = cy;
+                  break;
+                }
+              }
+              if (hasClearing) break;
+            }
+
+            if (hasClearing) {
+              // Look for another clearing in adjacent areas
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  if (dx === 0 && dy === 0) continue;
+
+                  const nx = x + dx * 50;
+                  const ny = y + dy * 50;
+
+                  if (nx >= 0 && nx < MAP_WIDTH && ny >= 0 && ny < MAP_HEIGHT) {
+                    // Check if this adjacent area has a clearing
+                    let hasAdjacentClearing = false;
+                    let adjClearingX = 0,
+                      adjClearingY = 0;
+
+                    for (let cy = ny; cy < ny + 50 && cy < MAP_HEIGHT; cy++) {
+                      for (let cx = nx; cx < nx + 50 && cx < MAP_WIDTH; cx++) {
+                        if (map[cy * MAP_WIDTH + cx] === ".") {
+                          hasAdjacentClearing = true;
+                          adjClearingX = cx;
+                          adjClearingY = cy;
+                          break;
+                        }
+                      }
+                      if (hasAdjacentClearing) break;
+                    }
+
+                    if (hasAdjacentClearing) {
+                      // Connect the two clearings with a path
+                      const pathWidth = Math.floor(Math.random() * 3) + 2;
+                      const steps = Math.max(
+                        Math.abs(adjClearingX - clearingX),
+                        Math.abs(adjClearingY - clearingY)
+                      );
+
+                      for (let step = 0; step <= steps; step++) {
+                        const t = steps === 0 ? 0 : step / steps;
+                        const px = Math.floor(
+                          clearingX + t * (adjClearingX - clearingX)
+                        );
+                        const py = Math.floor(
+                          clearingY + t * (adjClearingY - clearingY)
+                        );
+
+                        for (let wy = -pathWidth; wy <= pathWidth; wy++) {
+                          for (let wx = -pathWidth; wx <= pathWidth; wx++) {
+                            const pathX = px + wx;
+                            const pathY = py + wy;
+                            if (
+                              pathX >= 0 &&
+                              pathX < MAP_WIDTH &&
+                              pathY >= 0 &&
+                              pathY < MAP_HEIGHT
+                            ) {
+                              map[pathY * MAP_WIDTH + pathX] = ".";
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Helper function to create river valley structures
+      function createRiverValleyStructures(map) {
+        // Create wider paths parallel to rivers
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            if (map[y * MAP_WIDTH + x] === "~") {
+              // Check surrounding area for riverbank
+              for (let d = 1; d <= 5; d++) {
+                // Increased from 3 to 5
+                // Create paths on both sides of the river
+                if (x + d < MAP_WIDTH) map[y * MAP_WIDTH + (x + d)] = ".";
+                if (x - d >= 0) map[y * MAP_WIDTH + (x - d)] = ".";
+              }
+            }
+          }
+        }
+
+        // Add more bridges at regular intervals (decreased from 30 to 15)
+        for (let y = 10; y < MAP_HEIGHT; y += 15) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            if (map[y * MAP_WIDTH + x] === "~") {
+              // Create a wider bridge
+              for (let bw = -2; bw <= 2; bw++) {
+                // Increased width from -1/+1 to -2/+2
+                const bridgeY = y + bw;
+                if (bridgeY >= 0 && bridgeY < MAP_HEIGHT) {
+                  map[bridgeY * MAP_WIDTH + x] = "=";
+
+                  // Add some additional navigable area around bridges
+                  for (let by = -1; by <= 1; by++) {
+                    for (let bx = -3; bx <= 3; bx++) {
+                      if (bx === 0) continue; // Skip the bridge itself
+
+                      const areaX = x + bx;
+                      const areaY = bridgeY + by;
+
+                      if (
+                        areaX >= 0 &&
+                        areaX < MAP_WIDTH &&
+                        areaY >= 0 &&
+                        areaY < MAP_HEIGHT
+                      ) {
+                        if (map[areaY * MAP_WIDTH + areaX] !== "~") {
+                          map[areaY * MAP_WIDTH + areaX] = ".";
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Create more and larger settlements/structures near rivers
+        for (let i = 0; i < 30; i++) {
+          // Increased from 15 to 30
+          // Find a spot near a river
+          let foundSpot = false;
+          let centerX, centerY;
+
+          for (let attempts = 0; attempts < 100 && !foundSpot; attempts++) {
+            centerX = Math.floor(Math.random() * MAP_WIDTH);
+            centerY = Math.floor(Math.random() * MAP_HEIGHT);
+
+            // Check if there's a river nearby
+            let riverNearby = false;
+            for (let dy = -15; dy <= 15 && !riverNearby; dy++) {
+              // Increased from 10 to 15
+              for (let dx = -15; dx <= 15 && !riverNearby; dx++) {
+                const checkX = centerX + dx;
+                const checkY = centerY + dy;
+                if (
+                  checkX >= 0 &&
+                  checkX < MAP_WIDTH &&
+                  checkY >= 0 &&
+                  checkY < MAP_HEIGHT
+                ) {
+                  if (map[checkY * MAP_WIDTH + checkX] === "~") {
+                    riverNearby = true;
+                  }
+                }
+              }
+            }
+
+            if (riverNearby) foundSpot = true;
+          }
+
+          if (foundSpot) {
+            // Create a larger settlement/structure
+            const size = Math.floor(Math.random() * 10) + 8; // Increased from 3-8 to 8-18
+            for (let y = centerY - size; y <= centerY + size; y++) {
+              for (let x = centerX - size; x <= centerX + size; x++) {
+                if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                  // Create a mix of buildings and paths, with more paths
+                  if (Math.random() < 0.2) {
+                    // Decreased from 0.3 to 0.2 for more paths
+                    map[y * MAP_WIDTH + x] = "#"; // Building
+                  } else {
+                    map[y * MAP_WIDTH + x] = "."; // Path
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Add some large open areas (parks/fields) away from rivers
+        for (let i = 0; i < 20; i++) {
+          const centerX = Math.floor(Math.random() * MAP_WIDTH);
+          const centerY = Math.floor(Math.random() * MAP_HEIGHT);
+          const radius = Math.floor(Math.random() * 20) + 15;
+
+          // Check if this area is not too close to a river
+          let tooCloseToRiver = false;
+          for (
+            let y = centerY - radius;
+            y <= centerY + radius && !tooCloseToRiver;
+            y++
+          ) {
+            for (
+              let x = centerX - radius;
+              x <= centerX + radius && !tooCloseToRiver;
+              x++
+            ) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                if (map[y * MAP_WIDTH + x] === "~") {
+                  tooCloseToRiver = true;
+                }
+              }
+            }
+          }
+
+          if (!tooCloseToRiver) {
+            for (let y = centerY - radius; y <= centerY + radius; y++) {
+              for (let x = centerX - radius; x <= centerX + radius; x++) {
+                if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                  const dist = Math.sqrt(
+                    (x - centerX) ** 2 + (y - centerY) ** 2
+                  );
+                  if (dist <= radius) {
+                    map[y * MAP_WIDTH + x] = ".";
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Helper function to create mountain passes
+      function createMountainPasses(map) {
+        // Create horizontal and vertical passes through mountains
+        for (let i = 0; i < 15; i++) {
+          // Increased from 10 to 15 passes
+          const horizontal = Math.random() < 0.5;
+          const position = Math.floor(
+            Math.random() * (horizontal ? MAP_HEIGHT : MAP_WIDTH)
+          );
+          const passWidth = Math.floor(Math.random() * 3) + 2;
+
+          if (horizontal) {
+            // Horizontal pass
+            for (let x = 0; x < MAP_WIDTH; x++) {
+              for (let w = -passWidth; w <= passWidth; w++) {
+                const y = position + w;
+                if (y >= 0 && y < MAP_HEIGHT) {
+                  map[y * MAP_WIDTH + x] = ".";
+                }
+              }
+            }
+          } else {
+            // Vertical pass
+            for (let y = 0; y < MAP_HEIGHT; y++) {
+              for (let w = -passWidth; w <= passWidth; w++) {
+                const x = position + w;
+                if (x >= 0 && x < MAP_WIDTH) {
+                  map[y * MAP_WIDTH + x] = ".";
+                }
+              }
+            }
+          }
+        }
+
+        // Create more valleys (larger open areas)
+        for (let i = 0; i < 25; i++) {
+          // Increased from 15 to 25 valleys
+          const centerX = Math.floor(Math.random() * MAP_WIDTH);
+          const centerY = Math.floor(Math.random() * MAP_HEIGHT);
+          const radius = Math.floor(Math.random() * 20) + 10;
+
+          for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+                if (dist <= radius) {
+                  map[y * MAP_WIDTH + x] = ".";
+                }
+              }
+            }
+          }
+        }
+
+        // Add mountain peaks (clusters of mountains)
+        for (let i = 0; i < 40; i++) {
+          const centerX = Math.floor(Math.random() * MAP_WIDTH);
+          const centerY = Math.floor(Math.random() * MAP_HEIGHT);
+          const radius = Math.floor(Math.random() * 15) + 5;
+
+          for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+                // Create mountain peaks with some randomness
+                if (dist <= radius * (0.7 + Math.random() * 0.3)) {
+                  // Higher chance of mountains closer to the center
+                  const mountainProbability = 0.7 - (dist / radius) * 0.5;
+                  if (Math.random() < mountainProbability) {
+                    map[y * MAP_WIDTH + x] = "^";
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Add winding paths through mountain areas
+        for (let i = 0; i < 30; i++) {
+          let x = Math.floor(Math.random() * MAP_WIDTH);
+          let y = Math.floor(Math.random() * MAP_HEIGHT);
+          const length = Math.floor(Math.random() * 100) + 50;
+          const pathWidth = Math.floor(Math.random() * 2) + 1;
+
+          for (let step = 0; step < length; step++) {
+            // Random direction with tendency to continue in same direction
+            const direction = Math.floor(Math.random() * 4);
+
+            switch (direction) {
+              case 0:
+                x += 1;
+                break;
+              case 1:
+                x -= 1;
+                break;
+              case 2:
+                y += 1;
+                break;
+              case 3:
+                y -= 1;
+                break;
+            }
+
+            if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+              // Create a path
+              for (let wy = -pathWidth; wy <= pathWidth; wy++) {
+                for (let wx = -pathWidth; wx <= pathWidth; wx++) {
+                  const pathX = x + wx;
+                  const pathY = y + wy;
+                  if (
+                    pathX >= 0 &&
+                    pathX < MAP_WIDTH &&
+                    pathY >= 0 &&
+                    pathY < MAP_HEIGHT
+                  ) {
+                    map[pathY * MAP_WIDTH + pathX] = ".";
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Helper function to create a better urban layout
+      function createUrbanLayout(map) {
+        // Start fresh with a more deliberate urban design
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            map[y * MAP_WIDTH + x] = "."; // Start with empty space
+          }
+        }
+
+        // Create a grid of streets
+        const blockSize = 15; // Size of city blocks
+        const streetWidth = 3; // Width of streets
+
+        for (let y = 0; y < MAP_HEIGHT; y += blockSize) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            for (let sw = 0; sw < streetWidth; sw++) {
+              const streetY = y + sw;
+              if (streetY < MAP_HEIGHT) {
+                map[streetY * MAP_WIDTH + x] = "-"; // Horizontal streets
+              }
+            }
+          }
+        }
+
+        for (let x = 0; x < MAP_WIDTH; x += blockSize) {
+          for (let y = 0; y < MAP_HEIGHT; y++) {
+            for (let sw = 0; sw < streetWidth; sw++) {
+              const streetX = x + sw;
+              if (streetX < MAP_WIDTH) {
+                map[y * MAP_WIDTH + streetX] = "|"; // Vertical streets
+              }
+            }
+          }
+        }
+
+        // Create buildings within the blocks
+        for (let blockY = 0; blockY < MAP_HEIGHT; blockY += blockSize) {
+          for (let blockX = 0; blockX < MAP_WIDTH; blockX += blockSize) {
+            // Building size and position within block
+            const buildingWidth =
+              Math.floor(Math.random() * (blockSize - 8)) + 5;
+            const buildingHeight =
+              Math.floor(Math.random() * (blockSize - 8)) + 5;
+            const offsetX =
+              Math.floor(
+                Math.random() * (blockSize - buildingWidth - streetWidth)
+              ) + streetWidth;
+            const offsetY =
+              Math.floor(
+                Math.random() * (blockSize - buildingHeight - streetWidth)
+              ) + streetWidth;
+
+            for (let y = 0; y < buildingHeight; y++) {
+              for (let x = 0; x < buildingWidth; x++) {
+                const buildingX = blockX + offsetX + x;
+                const buildingY = blockY + offsetY + y;
+
+                if (buildingX < MAP_WIDTH && buildingY < MAP_HEIGHT) {
+                  map[buildingY * MAP_WIDTH + buildingX] = "#"; // Building
+                }
+              }
+            }
+          }
+        }
+
+        // Mark intersections with paths
+        for (let y = 0; y < MAP_HEIGHT; y += blockSize) {
+          for (let x = 0; x < MAP_WIDTH; x += blockSize) {
+            for (let iy = 0; iy < streetWidth; iy++) {
+              for (let ix = 0; ix < streetWidth; ix++) {
+                const intersectionX = x + ix;
+                const intersectionY = y + iy;
+                if (intersectionX < MAP_WIDTH && intersectionY < MAP_HEIGHT) {
+                  map[intersectionY * MAP_WIDTH + intersectionX] = "."; // Intersection
+                }
+              }
+            }
+          }
+        }
+
+        // Make all streets navigable
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            if (
+              map[y * MAP_WIDTH + x] === "-" ||
+              map[y * MAP_WIDTH + x] === "|"
+            ) {
+              map[y * MAP_WIDTH + x] = "."; // Make navigable
+            }
+          }
+        }
+      }
+
+      // Helper function to create safe paths through volcanic terrain
+      function createVolcanicPaths(map) {
+        // Create a network of safe paths through lava
+        createNavigablePaths(map, 40, 60, 4);
+
+        // Create some "safe islands" within lava
+        for (let i = 0; i < 25; i++) {
+          const centerX = Math.floor(Math.random() * MAP_WIDTH);
+          const centerY = Math.floor(Math.random() * MAP_HEIGHT);
+          const radius = Math.floor(Math.random() * 12) + 8;
+
+          for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+                if (dist <= radius) {
+                  map[y * MAP_WIDTH + x] = ".";
+                }
+              }
+            }
+          }
+        }
+
+        // Connect safe areas
+        for (let i = 0; i < 30; i++) {
+          const startX = Math.floor(Math.random() * MAP_WIDTH);
+          const startY = Math.floor(Math.random() * MAP_HEIGHT);
+
+          // Find a path to a safe area if we're in lava
+          if (map[startY * MAP_WIDTH + startX] === "~") {
+            let endX, endY;
+            let found = false;
+
+            // Look for a nearby safe area
+            for (
+              let searchRadius = 5;
+              searchRadius < 50 && !found;
+              searchRadius += 5
+            ) {
+              for (
+                let angle = 0;
+                angle < Math.PI * 2 && !found;
+                angle += Math.PI / 8
+              ) {
+                const checkX = Math.floor(
+                  startX + Math.cos(angle) * searchRadius
+                );
+                const checkY = Math.floor(
+                  startY + Math.sin(angle) * searchRadius
+                );
+
+                if (
+                  checkX >= 0 &&
+                  checkX < MAP_WIDTH &&
+                  checkY >= 0 &&
+                  checkY < MAP_HEIGHT
+                ) {
+                  if (map[checkY * MAP_WIDTH + checkX] === ".") {
+                    endX = checkX;
+                    endY = checkY;
+                    found = true;
+                  }
+                }
+              }
+            }
+
+            if (found) {
+              // Create a bridge/path
+              const dx = endX - startX;
+              const dy = endY - startY;
+              const steps = Math.max(Math.abs(dx), Math.abs(dy));
+
+              for (let step = 0; step <= steps; step++) {
+                const t = steps === 0 ? 0 : step / steps;
+                const x = Math.floor(startX + t * dx);
+                const y = Math.floor(startY + t * dy);
+
+                // Create a wider path
+                for (let wy = -1; wy <= 1; wy++) {
+                  for (let wx = -1; wx <= 1; wx++) {
+                    const pathX = x + wx;
+                    const pathY = y + wy;
+                    if (
+                      pathX >= 0 &&
+                      pathX < MAP_WIDTH &&
+                      pathY >= 0 &&
+                      pathY < MAP_HEIGHT
+                    ) {
+                      if (map[pathY * MAP_WIDTH + pathX] === "~") {
+                        map[pathY * MAP_WIDTH + pathX] = "="; // Bridge over lava
+                      } else {
+                        map[pathY * MAP_WIDTH + pathX] = "."; // Regular path
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Helper function to create connected navigable areas in hybrid maps
+      function createHybridNavigableAreas(map) {
+        // First add more and larger safe areas
+        for (let i = 0; i < 40; i++) {
+          // Increased from 20 to 40
+          const centerX = Math.floor(Math.random() * MAP_WIDTH);
+          const centerY = Math.floor(Math.random() * MAP_HEIGHT);
+          const radius = Math.floor(Math.random() * 25) + 15; // Increased from 10-25 to 15-40
+
+          for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+                if (dist <= radius) {
+                  map[y * MAP_WIDTH + x] = ".";
+                }
+              }
+            }
+          }
+        }
+
+        // Then connect them with more and wider paths
+        createNavigablePaths(map, 80, 150, 6); // Increased from 50 paths to 80, max length from 100 to 150, width from 4 to 6
+
+        // Convert more mountain and wall tiles to ground near paths to make wider corridors
+        let newMap = map.slice();
+        for (let y = 1; y < MAP_HEIGHT - 1; y++) {
+          for (let x = 1; x < MAP_WIDTH - 1; x++) {
+            if (
+              map[y * MAP_WIDTH + x] === "." ||
+              map[y * MAP_WIDTH + x] === "="
+            ) {
+              // Look at neighbors in a wider radius
+              for (let dy = -3; dy <= 3; dy++) {
+                // Increased from -2/+2 to -3/+3
+                for (let dx = -3; dx <= 3; dx++) {
+                  if (Math.abs(dx) + Math.abs(dy) <= 4) {
+                    // Increased from 3 to 4
+                    // Diamond shape
+                    const nx = x + dx;
+                    const ny = y + dy;
+                    if (
+                      nx >= 0 &&
+                      nx < MAP_WIDTH &&
+                      ny >= 0 &&
+                      ny < MAP_HEIGHT
+                    ) {
+                      if (
+                        map[ny * MAP_WIDTH + nx] === "^" ||
+                        map[ny * MAP_WIDTH + nx] === "#"
+                      ) {
+                        if (Math.random() < 0.6) {
+                          // Increased from 0.4 to 0.6
+                          // Higher chance to convert
+                          newMap[ny * MAP_WIDTH + nx] = ".";
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Copy back
+        for (let i = 0; i < MAP_WIDTH * MAP_HEIGHT; i++) {
+          map[i] = newMap[i];
+        }
+
+        // Add some additional random clearings
+        for (let i = 0; i < 60; i++) {
+          const centerX = Math.floor(Math.random() * MAP_WIDTH);
+          const centerY = Math.floor(Math.random() * MAP_HEIGHT);
+          const radius = Math.floor(Math.random() * 12) + 8;
+
+          for (let y = centerY - radius; y <= centerY + radius; y++) {
+            for (let x = centerX - radius; x <= centerX + radius; x++) {
+              if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+                const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+                if (dist <= radius) {
+                  // Higher chance to create navigable space
+                  if (Math.random() < 0.7) {
+                    map[y * MAP_WIDTH + x] = ".";
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Create some bridges over water
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+          for (let x = 0; x < MAP_WIDTH; x++) {
+            if (map[y * MAP_WIDTH + x] === "~") {
+              // Check if there are navigable areas on both sides
+              let navigableNeighbors = 0;
+              let nonWaterNeighbors = 0;
+
+              for (let dy = -2; dy <= 2; dy++) {
+                for (let dx = -2; dx <= 2; dx++) {
+                  if (dx === 0 && dy === 0) continue;
+
+                  const nx = x + dx;
+                  const ny = y + dy;
+
+                  if (nx >= 0 && nx < MAP_WIDTH && ny >= 0 && ny < MAP_HEIGHT) {
+                    if (map[ny * MAP_WIDTH + nx] === ".") {
+                      navigableNeighbors++;
+                    }
+                    if (map[ny * MAP_WIDTH + nx] !== "~") {
+                      nonWaterNeighbors++;
+                    }
+                  }
+                }
+              }
+
+              // If there are enough navigable neighbors and we're not in a large water body
+              if (
+                navigableNeighbors >= 3 &&
+                nonWaterNeighbors >= 8 &&
+                Math.random() < 0.3
+              ) {
+                map[y * MAP_WIDTH + x] = "="; // Create a bridge
+              }
+            }
+          }
+        }
+      }
+
+      // Initialize map array with different terrain types
+      function initMaps() {
+        console.log("Initializing maps...");
+        maps = []; // Clear existing maps
+
+        console.log("Generating map 0: Caves");
+        maps.push(generateCaveMap()); // Map 0: Caves
+
+        console.log("Generating map 1: Terrain");
+        maps.push(generateTerrainMap()); // Map 1: Terrain
+
+        console.log("Generating map 2: Maze");
+        maps.push(generateMazeMap()); // Map 2: Maze
+
+        console.log("Generating map 3: Islands");
+        maps.push(generateIslandMap()); // Map 3: Islands
+
+        console.log("Generating map 4: Forest");
+        maps.push(generateForestMap()); // Map 4: Forest
+
+        console.log("Generating map 5: Rivers");
+        maps.push(generateRiverMap()); // Map 5: Rivers
+
+        console.log("Generating map 6: Mountains");
+        maps.push(generateMountainMap()); // Map 6: Mountains
+
+        console.log("Generating map 7: Urban");
+        maps.push(generateUrbanMap()); // Map 7: Urban
+
+        console.log("Generating map 8: Volcanic");
+        maps.push(generateVolcanicMap()); // Map 8: Volcanic
+
+        console.log("Generating map 9: Hybrid");
+        maps.push(generateHybridMap()); // Map 9: Hybrid
+
+        console.log("Generating map 10: Arena");
+        maps.push(generateArenaMap()); // Map 10: Arena (new circular gladiator arena)
+
+        console.log("Adding stairs to maps...");
+        // Add stairs
+        for (let i = 0; i < NUM_MAPS; i++) {
+          if (i > 0) {
+            for (let s = 0; s < 5; s++) {
+              let pos;
+              do {
+                pos = Math.floor(Math.random() * MAP_WIDTH * MAP_HEIGHT);
+              } while (maps[i][pos] !== ".");
+              maps[i][pos] = "<";
+            }
+          }
+          if (i < NUM_MAPS - 1) {
+            for (let s = 0; s < 5; s++) {
+              let pos;
+              do {
+                pos = Math.floor(Math.random() * MAP_WIDTH * MAP_HEIGHT);
+              } while (maps[i][pos] !== ".");
+              maps[i][pos] = ">";
+            }
+          }
+        }
+
+        console.log("Distributing items on maps...");
+        // Distribute items on each map
+        for (let i = 0; i < maps.length; i++) {
+          console.log(`Distributing items on map ${i}...`);
+          distributeItems(maps[i]);
+          updateMapWithItems(maps[i]);
+        }
+
+        console.log("Maps initialization complete!");
+      }
+
+      function isNavigable(map, x, y) {
+        let char = map[y * MAP_WIDTH + x];
+        return (
+          char === "." ||
+          char === "-" ||
+          char === "=" ||
+          char === "<" ||
+          char === ">" ||
+          char === "\\" || // Weapon item
+          char === "&" || // Armor item
+          char === "$" // Ring/Talisman item
+        );
+      }
+
+      function getViewport() {
+        let map = maps[currentMapIndex];
+        let left = Math.max(0, player.x - Math.floor(VIEWPORT_WIDTH / 2));
+        let top = Math.max(0, player.y - Math.floor(VIEWPORT_HEIGHT / 2));
+        let right = left + VIEWPORT_WIDTH;
+        let bottom = top + VIEWPORT_HEIGHT;
+        if (right > MAP_WIDTH) {
+          left = MAP_WIDTH - VIEWPORT_WIDTH;
+          right = MAP_WIDTH;
+        }
+        if (bottom > MAP_HEIGHT) {
+          top = MAP_HEIGHT - VIEWPORT_HEIGHT;
+          bottom = MAP_HEIGHT;
+        }
+
+        // Make sure we fill the entire viewport, but leave space for the status lines
+        let output = [];
+        // Calculate the game display height (total viewport height minus status area lines)
+        const statusAreaHeight = 11; // Updated from 10 to 11 lines (added a line for inventory)
+        const gameDisplayHeight = VIEWPORT_HEIGHT - statusAreaHeight;
+
+        for (let y = top; y < top + gameDisplayHeight; y++) {
+          let row = "";
+          for (let x = left; x < right; x++) {
+            // Make sure global variables are in sync with player object
+            isAttacking = player.isAttacking;
+
+            // Check if this position is part of the attack animation
+            if (isAttacking && isInAttackArea(x, y)) {
+              // Get the character from the attack animation
+              const animChar = getAttackAnimationChar(x, y);
+              if (animChar) {
+                row += animChar;
+                continue;
+              }
+            }
+
+            if (x === player.x && y === player.y) {
+              // Player character with possible background indicating stairs
+              const cell = map[y * MAP_WIDTH + player.x];
+              // Always show the player character when the player is standing on a tile
+              // Use directional text shadow to indicate facing direction
+              const directionShadows = [
+                "0 2px 8px rgba(255, 153, 0, 0.8)", // Down (orange)
+                "2px 0 8px rgba(0, 204, 0, 0.8)", // Right (green)
+                "0 -2px 8px rgba(0, 204, 255, 0.8)", // Up (blue)
+                "-2px 0 8px rgba(255, 0, 204, 0.8)", // Left (purple)
+              ];
+
+              // Add specific styling for when the player is on special tiles
+              if (cell === "<") {
+                row += `<span class="player upstairs" style="text-shadow: 0 0 10px #ffffff, ${
+                  directionShadows[player.direction]
+                };">@</span>`;
+              } else if (cell === ">") {
+                row += `<span class="player downstairs" style="text-shadow: 0 0 10px #ffffff, ${
+                  directionShadows[player.direction]
+                };">@</span>`;
+              } else if (cell === "\\") {
+                row += `<span class="player weapon" style="text-shadow: 0 0 10px #ffffff, ${
+                  directionShadows[player.direction]
+                };">@</span>`;
+              } else if (cell === "&") {
+                row += `<span class="player armor" style="text-shadow: 0 0 10px #ffffff, ${
+                  directionShadows[player.direction]
+                };">@</span>`;
+              } else if (cell === "$") {
+                row += `<span class="player trinket" style="text-shadow: 0 0 10px #ffffff, ${
+                  directionShadows[player.direction]
+                };">@</span>`;
+              } else {
+                row += `<span class="player" style="text-shadow: 0 0 10px #ffffff, ${
+                  directionShadows[player.direction]
+                };">@</span>`;
+              }
+            } else {
+              const cell = map[y * MAP_WIDTH + x];
+              if (cell === "<") {
+                row += `<span class="upstairs">&lt;</span>`;
+              } else if (cell === ">") {
+                row += `<span class="downstairs">&gt;</span>`;
+              } else if (cell === "\\") {
+                row += `<span class="weapon">\\</span>`;
+              } else if (cell === "&") {
+                row += `<span class="armor">&</span>`;
+              } else if (cell === "$") {
+                row += `<span class="trinket">$</span>`;
+              } else {
+                row += cell;
+              }
+            }
+          }
+          output.push(row);
+        }
+
+        // Make sure we have exactly gameDisplayHeight rows
+        while (output.length < gameDisplayHeight) {
+          output.push(" ".repeat(VIEWPORT_WIDTH));
+        }
+
+        // Add expanded status line - will have multiple sections
+        // Calculate how many lines we need for the status area
+        // Section 1: Base Stats (2 lines + border)
+        // Section 2: Status Effects (2 lines + border)
+        // Section 3: Equipment (4 lines + border) - Now 4 instead of 3 for separate hand equipment
+        // Section 4: RAW INVENTORY (new section)
+        // Total: 10 lines (3 sections with borders)
+
+        // Top border
+        output.push("+" + "-".repeat(VIEWPORT_WIDTH - 2) + "+");
+
+        // SECTION 1: BASE STATS
+        // First stats line
+        const healthDisplay = `HP: ${player.stats.health}/${player.stats.maxHealth}`;
+        const staminaDisplay = `SP: ${player.stats.stamina}/${player.stats.maxStamina}`;
+        const strDisplay = `STR: ${player.stats.strength}`;
+        const dexDisplay = `DEX: ${player.stats.dexterity}`;
+        const intDisplay = `INT: ${player.stats.intelligence}`;
+
+        let statsLine1 = "| ";
+        statsLine1 += healthDisplay + " | ";
+        statsLine1 += staminaDisplay + " | ";
+        statsLine1 += strDisplay + " | ";
+        statsLine1 += dexDisplay + " | ";
+        statsLine1 += intDisplay + " ";
+
+        // Add padding to fill the width
+        let paddingLength = VIEWPORT_WIDTH - 2 - statsLine1.length;
+        if (paddingLength > 0) {
+          statsLine1 += " ".repeat(paddingLength);
+        }
+        statsLine1 += "|";
+        output.push(statsLine1);
+
+        // Second stats line
+        const faithDisplay = `FTH: ${player.stats.faith}`;
+        const vitalityDisplay = `VIT: ${player.stats.vitality}`;
+        const enduranceDisplay = `END: ${player.stats.endurance}`;
+        const resistanceDisplay = `RES: ${player.stats.resistance}`;
+        const luckDisplay = `LCK: ${player.stats.luck}`;
+
+        let statsLine2 = "| ";
+        statsLine2 += faithDisplay + " | ";
+        statsLine2 += vitalityDisplay + " | ";
+        statsLine2 += enduranceDisplay + " | ";
+        statsLine2 += resistanceDisplay + " | ";
+        statsLine2 += luckDisplay + " ";
+
+        // Add padding
+        paddingLength = VIEWPORT_WIDTH - 2 - statsLine2.length;
+        if (paddingLength > 0) {
+          statsLine2 += " ".repeat(paddingLength);
+        }
+        statsLine2 += "|";
+        output.push(statsLine2);
+
+        // Section separator
+        output.push("|" + "-".repeat(VIEWPORT_WIDTH - 2) + "|");
+
+        // SECTION 2: STATUS EFFECTS & MODIFIERS
+        // Format buffs into a comma-separated list
+        let buffsText = "";
+        if (player.buffs.length > 0) {
+          buffsText = player.buffs.map((buff) => buff.name).join(", ");
+        } else {
+          buffsText = "None";
+        }
+
+        // Format buffs line
+        let buffsLine = "| BUFFS: " + buffsText;
+        paddingLength = VIEWPORT_WIDTH - 2 - buffsLine.length;
+        if (paddingLength > 0) {
+          buffsLine += " ".repeat(paddingLength);
+        }
+        buffsLine += "|";
+        output.push(buffsLine);
+
+        // Format debuffs into a comma-separated list
+        let debuffsText = "";
+        if (player.debuffs.length > 0) {
+          debuffsText = player.debuffs.map((debuff) => debuff.name).join(", ");
+        } else {
+          debuffsText = "None";
+        }
+
+        // Format debuffs line
+        let debuffsLine = "| DEBUFFS: " + debuffsText;
+        paddingLength = VIEWPORT_WIDTH - 2 - debuffsLine.length;
+        if (paddingLength > 0) {
+          debuffsLine += " ".repeat(paddingLength);
+        }
+        debuffsLine += "|";
+        output.push(debuffsLine);
+
+        // Section separator
+        output.push("|" + "-".repeat(VIEWPORT_WIDTH - 2) + "|");
+
+        // SECTION 3: EQUIPMENT & INVENTORY
+        // First equipment line - head, chest, legs, arms
+        const headText = `HEAD: ${
+          player.equipment.head
+            ? `<span style="color: var(--item-color-armor)">${player.equipment.head.name}</span>`
+            : "None"
+        }`;
+        const chestText = `CHEST: ${
+          player.equipment.chest
+            ? `<span style="color: var(--item-color-armor)">${player.equipment.chest.name}</span>`
+            : "None"
+        }`;
+        const legsText = `LEGS: ${
+          player.equipment.legs
+            ? `<span style="color: var(--item-color-armor)">${player.equipment.legs.name}</span>`
+            : "None"
+        }`;
+        const armsText = `ARMS: ${
+          player.equipment.arms
+            ? `<span style="color: var(--item-color-armor)">${player.equipment.arms.name}</span>`
+            : "None"
+        }`;
+
+        let equipLine1 = "| ";
+        equipLine1 += headText + " | ";
+        equipLine1 += chestText + " | ";
+        equipLine1 += legsText + " | ";
+        equipLine1 += armsText + " ";
+
+        // Add padding
+        paddingLength = VIEWPORT_WIDTH - 2 - equipLine1.length;
+        if (paddingLength > 0) {
+          equipLine1 += " ".repeat(paddingLength);
+        }
+        equipLine1 += "|";
+        output.push(equipLine1);
+
+        // Second equipment line - right hand weapons (can have multiple)
+        let rightHandItems = "None";
+        if (player.equipment.rightHand.length > 0) {
+          rightHandItems = player.equipment.rightHand
+            .map(
+              (item) =>
+                `<span style="color: var(--item-color-weapon)">${item.name}</span>`
+            )
+            .join(", ");
+        }
+        const rightHandText = `R-HAND: ${rightHandItems}`;
+
+        let equipLine2 = "| " + rightHandText;
+
+        // Add padding
+        paddingLength = VIEWPORT_WIDTH - 2 - equipLine2.length;
+        if (paddingLength > 0) {
+          equipLine2 += " ".repeat(paddingLength);
+        }
+        equipLine2 += "|";
+        output.push(equipLine2);
+
+        // Third equipment line - left hand weapons (can have multiple)
+        let leftHandItems = "None";
+        if (player.equipment.leftHand.length > 0) {
+          leftHandItems = player.equipment.leftHand
+            .map(
+              (item) =>
+                `<span style="color: var(--item-color-weapon)">${item.name}</span>`
+            )
+            .join(", ");
+        }
+        const leftHandText = `L-HAND: ${leftHandItems}`;
+
+        let equipLine3 = "| " + leftHandText;
+
+        // Add padding
+        paddingLength = VIEWPORT_WIDTH - 2 - equipLine3.length;
+        if (paddingLength > 0) {
+          equipLine3 += " ".repeat(paddingLength);
+        }
+        equipLine3 += "|";
+        output.push(equipLine3);
+
+        // Fourth equipment line - rings and talismans
+        const ringsText =
+          "RINGS: " +
+          (player.equipment.rings.filter((r) => r).length > 0
+            ? player.equipment.rings
+                .filter((r) => r)
+                .map(
+                  (r) =>
+                    `<span style="color: var(--item-color-ring)">${r.name}</span>`
+                )
+                .join(", ")
+            : "None");
+        const talismansText =
+          "TALISMANS: " +
+          (player.equipment.talismans.filter((t) => t).length > 0
+            ? player.equipment.talismans
+                .filter((t) => t)
+                .map(
+                  (t) =>
+                    `<span style="color: var(--item-color-talisman)">${t.name}</span>`
+                )
+                .join(", ")
+            : "None");
+
+        let equipLine4 = "| ";
+        equipLine4 += ringsText + " | ";
+        equipLine4 += talismansText + " ";
+
+        // Add padding
+        paddingLength = VIEWPORT_WIDTH - 2 - equipLine4.length;
+        if (paddingLength > 0) {
+          equipLine4 += " ".repeat(paddingLength);
+        }
+        equipLine4 += "|";
+        output.push(equipLine4);
+
+        // Section separator
+        output.push("|" + "-".repeat(VIEWPORT_WIDTH - 2) + "|");
+
+        // SECTION 4: RAW INVENTORY (new section)
+        // Show all items currently in inventory
+        let inventoryLine = renderInventory(player);
+        paddingLength = VIEWPORT_WIDTH - 2 - inventoryLine.length;
+        if (paddingLength > 0) {
+          inventoryLine += " ".repeat(paddingLength);
+        }
+        inventoryLine += "|";
+        output.push(inventoryLine);
+
+        // Bottom border
+        output.push("+" + "-".repeat(VIEWPORT_WIDTH - 2) + "+");
+
+        return output.join("\n");
+      }
+
+      function updateMap() {
+        // Update the main map display
+        document.getElementById("map").innerHTML = getViewport();
+      }
+
+      // Update the HUD display with current player stats (no longer needed since it's in the viewport)
+      function updateHUD() {
+        // This function is now empty as the HUD is part of the viewport render
+      }
+
+      function movePlayer(dx, dy) {
+        // Cancel any attack if the player moves
+        if (player.isAttacking) {
+          if (attackTimer) {
+            clearTimeout(attackTimer);
+            attackTimer = null;
+          }
+          player.isAttacking = false;
+          isAttacking = false;
+        }
+
+        // Update player direction based on movement
+        if (dx > 0) player.direction = 1; // Right
+        else if (dx < 0) player.direction = 3; // Left
+        else if (dy > 0) player.direction = 0; // Down
+        else if (dy < 0) player.direction = 2; // Up
+
+        // Update global variable for backward compatibility
+        playerDirection = player.direction;
+
+        let newX = player.x + dx;
+        let newY = player.y + dy;
+
+        console.log(
+          `Player attempting to move from (${player.x}, ${player.y}) to (${newX}, ${newY})`
+        );
+
+        // Check if we're in bounds
+        if (newX >= 0 && newX < MAP_WIDTH && newY >= 0 && newY < MAP_HEIGHT) {
+          // Get the character at the target position
+          const targetCell = maps[currentMapIndex][newY * MAP_WIDTH + newX];
+          console.log(`Target cell contains: '${targetCell}'`);
+
+          if (isNavigable(maps[currentMapIndex], newX, newY)) {
+            console.log(`Moving to navigable cell: '${targetCell}'`);
+            player.x = newX;
+            player.y = newY;
+
+            // Update global variables for backward compatibility
+            px = player.x;
+            py = player.y;
+
+            // Check if player picked up an item
+            console.log(
+              `Checking for item pickup at (${player.x}, ${player.y})`
+            );
+            const itemPickedUp = pickupItem(player, maps[currentMapIndex]);
+            if (itemPickedUp) {
+              console.log(
+                `Successfully picked up an item at (${player.x}, ${player.y})`
+              );
+            }
+
+            // If we're on a stair tile, handle level transition
+            let char = maps[currentMapIndex][player.y * MAP_WIDTH + player.x];
+            if (char === ">" && currentMapIndex < NUM_MAPS - 1) {
+              console.log(`Going down stairs to map ${currentMapIndex + 1}`);
+              currentMapIndex++;
+              placePlayerOnRandomDot();
+
+              // Reset and redistribute items on the new map
+              console.log(`Resetting items on new map ${currentMapIndex}`);
+              resetAndDistributeItems(maps[currentMapIndex], true);
+            } else if (char === "<" && currentMapIndex > 0) {
+              console.log(`Going up stairs to map ${currentMapIndex - 1}`);
+              currentMapIndex--;
+              placePlayerOnRandomDot();
+
+              // Reset and redistribute items on the new map
+              console.log(`Resetting items on new map ${currentMapIndex}`);
+              resetAndDistributeItems(maps[currentMapIndex], true);
+            }
+
+            updateMap();
+          } else {
+            console.log(
+              `COLLISION: Cannot move to non-navigable cell: '${targetCell}'`
+            );
+          }
+        } else {
+          console.log(`COLLISION: Attempted to move out of map bounds`);
+        }
+      }
+
+      function placePlayerOnRandomDot() {
+        let map = maps[currentMapIndex];
+        while (true) {
+          let rx = Math.floor(Math.random() * MAP_WIDTH);
+          let ry = Math.floor(Math.random() * MAP_HEIGHT);
+          if (map[ry * MAP_WIDTH + rx] === ".") {
+            player.x = rx;
+            player.y = ry;
+
+            // Update global variables for backward compatibility
+            px = player.x;
+            py = player.y;
+            break;
+          }
+        }
+      }
+
+      // Add a function to start the attack animation
+      function startAttack() {
+        // Cancel any existing attack animation timer
+        if (attackTimer) {
+          clearTimeout(attackTimer);
+          attackTimer = null;
+        }
+
+        // Use the player's attack method
+        player.attack();
+
+        // Update global variables for backward compatibility
+        isAttacking = player.isAttacking;
+        attackFrame = player.attackFrame;
+      }
+
+      // Check if a position is within the attack animation area
+      function isInAttackArea(x, y) {
+        return (
+          x >= player.x - 1 &&
+          x <= player.x + 1 &&
+          y >= player.y - 1 &&
+          y <= player.y + 1 &&
+          !(x === player.x && y === player.y) // Exclude player position
+        );
+      }
+
+      // Check if there are walls in the attack area and log them
+      function checkAttackHits() {
+        const map = maps[currentMapIndex];
+
+        // Sync global variables for backward compatibility
+        attackFrame = player.attackFrame;
+        playerDirection = player.direction;
+
+        // Log the current attack frame and direction
+        console.log(
+          `Attack Frame ${attackFrame + 1}/5, Direction: ${
+            ["DOWN", "RIGHT", "UP", "LEFT"][playerDirection]
+          }`
+        );
+
+        // Check all positions in the 3x3 grid around the player
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            // Skip the player's position
+            if (dx === 0 && dy === 0) continue;
+
+            const x = player.x + dx;
+            const y = player.y + dy;
+
+            // Make sure we're within map boundaries
+            if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+              const cell = map[y * MAP_WIDTH + x];
+
+              // Convert to local 3x3 coordinates (0-2, 0-2)
+              const localX = dx + 1; // -1 → 0, 0 → 1, 1 → 2
+              const localY = dy + 1; // -1 → 0, 0 → 1, 1 → 2
+
+              // Calculate position number (0-8)
+              const posNumber = localY * 3 + localX;
+
+              // Get the attack animation character at this position
+              const frame =
+                directionAttackAnimations[playerDirection][attackFrame];
+              const animChar = frame[localY][localX];
+
+              // Check if this position has a weapon character and hits a wall
+              if (
+                cell === "#" &&
+                (animChar === "|" ||
+                  animChar === "\\" ||
+                  animChar === "/" ||
+                  animChar === "-")
+              ) {
+                console.log(
+                  `🔥 HIT: Wall at position ${posNumber} (grid: ${localX},${localY}) with ${animChar}`
+                );
+              } else if (
+                animChar === "|" ||
+                animChar === "\\" ||
+                animChar === "/" ||
+                animChar === "-"
+              ) {
+                // Log empty swing
+                console.log(
+                  `➖ Swing: Empty at position ${posNumber} (grid: ${localX},${localY}) with ${animChar}`
+                );
+              }
+            }
+          }
+        }
+      }
+
+      // Get the character to display for the attack animation
+      function getAttackAnimationChar(x, y) {
+        // Convert world coordinates to local 3x3 grid coordinates (0,0 to 2,2)
+        const localX = x - (player.x - 1);
+        const localY = y - (player.y - 1);
+
+        // Make sure global variables are in sync with player object
+        playerDirection = player.direction;
+        attackFrame = player.attackFrame;
+
+        // Get the current animation frame for the player's direction
+        const frame = directionAttackAnimations[playerDirection][attackFrame];
+
+        // Get the character from the animation frame
+        const char = frame[localY][localX];
+
+        // Don't override the map with 'X' characters (background)
+        if (char === "X") return null;
+
+        // For the weapon parts, use a styled span
+        if (char === "|" || char === "\\" || char === "-" || char === "/") {
+          return `<span class="weapon">${char}</span>`;
+        }
+
+        return char;
+      }
+
+      // Handle keyboard input
+      document.addEventListener("keydown", function (event) {
+        // Prevent default actions for arrow keys
+        if (
+          event.key === "ArrowUp" ||
+          event.key === "ArrowDown" ||
+          event.key === "ArrowLeft" ||
+          event.key === "ArrowRight" ||
+          event.key === " " || // Space bar
+          event.key === "i" || // Inventory key
+          event.key === "d" || // Debug key
+          event.key === "r" // Reset key
+        ) {
+          event.preventDefault();
+        }
+
+        // Debug keys for development
+        if (event.key === "d") {
+          console.log("DEBUG: Displaying game state");
+          console.log(`Player position: (${player.x}, ${player.y})`);
+          console.log(`Current map: ${currentMapIndex}`);
+          console.log(`Items on map: ${mapItems.length}`);
+          console.log(`Inventory items: ${player.inventory.length}`);
+          return;
+        }
+
+        if (event.key === "r") {
+          console.log("DEBUG: Forcing item redistribution");
+          resetAndDistributeItems(maps[currentMapIndex], true);
+          updateMap();
+          return;
+        }
+
+        // Regular game controls below
+        switch (event.key) {
+          case "ArrowUp":
+            if (event.metaKey && event.shiftKey) {
+              if (currentMapIndex > 0) {
+                currentMapIndex--;
+                placePlayerOnRandomDot();
+                updateMap();
+                console.log(`Debug: Moved up to floor ${currentMapIndex}`);
+              } else {
+                console.log("Debug: Already at the top floor");
+              }
+              event.preventDefault();
+            } else {
+              movePlayer(0, -1);
+            }
+            break;
+          case "ArrowDown":
+            if (event.metaKey && event.shiftKey) {
+              if (currentMapIndex < NUM_MAPS - 1) {
+                currentMapIndex++;
+                placePlayerOnRandomDot();
+                updateMap();
+                console.log(`Debug: Moved down to floor ${currentMapIndex}`);
+              } else {
+                console.log("Debug: Already at the bottom floor");
+              }
+              event.preventDefault();
+            } else {
+              movePlayer(0, 1);
+            }
+            break;
+          case "ArrowLeft":
+            movePlayer(-1, 0);
+            break;
+          case "ArrowRight":
+            movePlayer(1, 0);
+            break;
+          // Debug floor traversal with cmd+shift+, and cmd+shift+.
+          case ",":
+            if (event.metaKey && event.shiftKey) {
+              if (currentMapIndex > 0) {
+                currentMapIndex--;
+                placePlayerOnRandomDot();
+                updateMap();
+                console.log(`Debug: Moved up to floor ${currentMapIndex}`);
+              } else {
+                console.log("Debug: Already at the top floor");
+              }
+              event.preventDefault();
+            }
+            break;
+          case ".":
+            if (event.metaKey && event.shiftKey) {
+              if (currentMapIndex < NUM_MAPS - 1) {
+                currentMapIndex++;
+                placePlayerOnRandomDot();
+                updateMap();
+                console.log(`Debug: Moved down to floor ${currentMapIndex}`);
+              } else {
+                console.log("Debug: Already at the bottom floor");
+              }
+              event.preventDefault();
+            }
+            break;
+          // Direct floor access with number keys 0-9
+          case "0":
+          case "1":
+          case "2":
+          case "3":
+          case "4":
+          case "5":
+          case "6":
+          case "7":
+          case "8":
+          case "9":
+            if (event.metaKey) {
+              const targetFloor = parseInt(event.key);
+              if (targetFloor >= 0 && targetFloor < NUM_MAPS) {
+                currentMapIndex = targetFloor;
+                placePlayerOnRandomDot();
+                updateMap();
+                console.log(`Debug: Teleported to floor ${currentMapIndex}`);
+              } else {
+                console.log(`Debug: Floor ${targetFloor} does not exist`);
+              }
+              event.preventDefault();
+            }
+            break;
+          case " ": // Spacebar
+            player.attack();
+            event.preventDefault();
+            break;
+        }
+      });
+
+      // Initialize and start
+      document.getElementById("map").textContent =
+        "Generating map, please wait...";
+
+      // Function to adjust viewport based on window size
+      function adjustViewportToWindow() {
+        const windowWidth = window.innerWidth;
+        const windowHeight = window.innerHeight;
+
+        // For monospace fonts, we need to consider the aspect ratio
+        // Most monospace fonts are about 0.6 width/height ratio
+        const charAspectRatio = 0.6;
+
+        // Calculate the maximum possible characters we can fit
+        // Try various font sizes and find the one that maximizes viewport usage
+        let bestFontSize = 12;
+        let maxChars = 0;
+
+        for (let fontSize = 8; fontSize <= 24; fontSize++) {
+          // How many characters we can fit with this font size
+          const widthChars = Math.floor(
+            windowWidth / (fontSize * charAspectRatio)
+          );
+          const heightChars = Math.floor(windowHeight / fontSize);
+          const totalChars = widthChars * heightChars;
+
+          // Choose the font size that fits the most characters
+          // but ensure it's not too small to be readable
+          if (totalChars > maxChars && fontSize >= 10) {
+            maxChars = totalChars;
+            bestFontSize = fontSize;
+          }
+        }
+
+        // Update viewport dimensions
+        VIEWPORT_WIDTH = Math.floor(
+          windowWidth / (bestFontSize * charAspectRatio)
+        );
+        VIEWPORT_HEIGHT = Math.floor(windowHeight / bestFontSize);
+
+        // Set the font size and line height
+        const preElement = document.querySelector("pre");
+        preElement.style.fontSize = `${bestFontSize}px`;
+        preElement.style.lineHeight = `${bestFontSize}px`;
+
+        // If the game is already initialized, update the map display
+        if (maps.length > 0) {
+          updateMap();
+        }
+      }
+
+      // Set up resize listener
+      window.addEventListener("resize", adjustViewportToWindow);
+
+      // Initial adjustment
+      adjustViewportToWindow();
+
+      // Set up stamina recovery interval
+      setInterval(() => {
+        // Recover stamina over time
+        player.recoverStamina(1);
+
+        // Update status effects
+        player.updateStatusEffects();
+      }, 500); // Recover 1 stamina every 500ms
+
+      setTimeout(() => {
+        initMaps();
+        // Add items to maps after they've been initialized
+        for (let i = 0; i < NUM_MAPS; i++) {
+          resetAndDistributeItems(maps[i], true);
+        }
+        placePlayerOnRandomDot();
+        updateMap();
+      }, 100);
+
+      // Player initialization - don't update maps with items here
+      placePlayerOnRandomDot();
+
+      // Handle clicks on inventory items
+      document.addEventListener("click", function (event) {
+        // Check if a clickable inventory item was clicked
+        if (event.target.classList.contains("inventory-item")) {
+          console.log("DEBUG: Inventory item clicked!");
+
+          const itemIndex = parseInt(event.target.dataset.itemIndex);
+          const itemType = event.target.dataset.itemType;
+          const itemName = event.target.dataset.itemName;
+
+          console.log(`DEBUG: Item data from HTML:`, {
+            index: itemIndex,
+            type: itemType,
+            name: itemName,
+          });
+
+          // Get the item from the inventory
+          const item = player.inventory[itemIndex];
+
+          if (item) {
+            console.log(`DEBUG: Found item in inventory:`, item);
+            console.log(
+              `DEBUG: Complete item details:`,
+              JSON.stringify(item, null, 2)
+            );
+            console.log(
+              `DEBUG: Current equipment state:`,
+              JSON.stringify(player.equipment, null, 2)
+            );
+
+            // Try to equip the item
+            const wasEquipped = tryEquipItem(player, item, itemIndex);
+
+            if (wasEquipped) {
+              console.log(`DEBUG: Successfully equipped ${item.name}`);
+
+              // Create and show a notification
+              showEquipNotification(item);
+
+              // Refresh the display to show equipped item
+              updateMap();
+            } else {
+              console.log(`Could not equip ${item.name} - no available slot`);
+            }
+          }
+        }
+      });
+
+      /**
+       * Try to equip an item to the appropriate equipment slot
+       * @param {Object} player - The player object
+       * @param {Object} item - The item to equip
+       * @param {number} inventoryIndex - The index of the item in inventory
+       * @returns {boolean} Whether the item was equipped
+       */
+      function tryEquipItem(player, item, inventoryIndex) {
+        console.log(
+          `DEBUG: Trying to equip ${item.name} (${item.type}) from index ${inventoryIndex}`
+        );
+        let equipped = false;
+
+        switch (item.type) {
+          case "weapon":
+            // Equip to right hand if empty, otherwise left hand
+            if (player.equipment.rightHand.length === 0) {
+              player.equipment.rightHand.push(item);
+              equipped = true;
+              console.log(`DEBUG: Equipped weapon to right hand`);
+            } else if (player.equipment.leftHand.length === 0) {
+              player.equipment.leftHand.push(item);
+              equipped = true;
+              console.log(`DEBUG: Equipped weapon to left hand`);
+            }
+            break;
+
+          case "armor":
+            // Try to equip to the appropriate armor slot if specified
+            if (item.slot && !player.equipment[item.slot]) {
+              player.equipment[item.slot] = item;
+              equipped = true;
+              console.log(`DEBUG: Equipped armor to ${item.slot}`);
+            } else if (!item.slot) {
+              // If slot is not specified, try to find any empty armor slot
+              const armorSlots = ["head", "chest", "legs", "arms"];
+              for (const slot of armorSlots) {
+                if (!player.equipment[slot]) {
+                  player.equipment[slot] = item;
+                  equipped = true;
+                  console.log(`DEBUG: Equipped armor to ${slot}`);
+                  break;
+                }
+              }
+            }
+            break;
+
+          case "ring":
+            // Find empty ring slot
+            for (let i = 0; i < player.equipment.rings.length; i++) {
+              if (!player.equipment.rings[i]) {
+                player.equipment.rings[i] = item;
+                equipped = true;
+                console.log(`DEBUG: Equipped ring to slot ${i}`);
+                break;
+              }
+            }
+            break;
+
+          case "talisman":
+            // Find empty talisman slot
+            for (let i = 0; i < player.equipment.talismans.length; i++) {
+              if (!player.equipment.talismans[i]) {
+                player.equipment.talismans[i] = item;
+                equipped = true;
+                console.log(`DEBUG: Equipped talisman to slot ${i}`);
+                break;
+              }
+            }
+            break;
+        }
+
+        // If successfully equipped, remove from inventory
+        if (equipped) {
+          console.log(`DEBUG: Item equipped, removing from inventory`);
+          // Remove one quantity or remove the item entirely if quantity would be 0
+          if (item.quantity > 1) {
+            item.quantity--;
+            console.log(`DEBUG: Reduced quantity to ${item.quantity}`);
+          } else {
+            player.inventory.splice(inventoryIndex, 1);
+            console.log(`DEBUG: Removed item from inventory completely`);
+          }
+        } else {
+          console.log(`DEBUG: Failed to equip, no suitable slot available`);
+        }
+
+        return equipped;
+      }
+
+      // Initialize the viewport size
+
+      /**
+       * Shows a brief notification about equipped items
+       * @param {Object} item - The item that was equipped
+       */
+      function showEquipNotification(item) {
+        // Create notification element
+        const notification = document.createElement("div");
+        notification.className = "equip-notification";
+        notification.textContent = `Equipped: ${item.name}`;
+
+        // Style the notification
+        Object.assign(notification.style, {
+          position: "absolute",
+          bottom: "20px",
+          left: "50%",
+          transform: "translateX(-50%)",
+          backgroundColor: "rgba(0, 0, 0, 0.7)",
+          color: `var(--item-color-${item.type})`,
+          padding: "10px 20px",
+          borderRadius: "5px",
+          fontFamily: "monospace",
+          zIndex: "1000",
+          transition: "opacity 0.5s",
+          opacity: "1",
+          textAlign: "center",
+        });
+
+        // Add to document
+        document.body.appendChild(notification);
+
+        // Remove after 2 seconds
+        setTimeout(() => {
+          notification.style.opacity = "0";
+          setTimeout(() => {
+            document.body.removeChild(notification);
+          }, 500);
+        }, 2000);
+      }
+    </script>
+  </body>
+</html>
